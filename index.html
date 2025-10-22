@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatMate - Real-time Chat App</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'] } } }
+    }
+  </script>
+
+  <!-- Socket.IO Client -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+  <style>
+    body { height: 100vh; display: flex; flex-direction: column; background-color: #f7f9fb; }
+    .container { flex-grow: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
+    .message { max-width: 80%; padding: 8px 12px; border-radius: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); word-wrap: break-word; }
+    .right { align-self: flex-end; background-color: #3b82f6; color: white; border-bottom-right-radius: 2px; }
+    .left { align-self: flex-start; background-color: #fff; color: #1f2937; border-bottom-left-radius: 2px; }
+    .system-message { align-self: center; background-color: #e5e7eb; color: #4b5563; font-size: 0.8rem; padding: 4px 8px; border-radius: 12px; font-style: italic; }
+  </style>
+</head>
+
+<body class="font-sans">
+  <!-- Navbar -->
+  <nav class="bg-white shadow-md p-4 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="text-xl font-bold text-gray-800 flex items-center">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 4v-4z"/>
+      </svg>
+      ChatMate
+    </h1>
+    <span id="user-info" class="text-sm text-gray-500">Not Connected</span>
+  </nav>
+
+  <!-- Modal -->
+  <div id="name-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+    <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+      <h2 class="text-2xl font-bold text-gray-800 mb-4">Welcome to ChatMate</h2>
+      <form id="name-form">
+        <input type="text" id="name-input" placeholder="Enter your name" required class="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-blue-500">
+        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl shadow-md">Join Chat</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Chat Container -->
+  <div class="container bg-gray-50 flex-1" id="chat-container"></div>
+
+  <!-- Message Input -->
+  <div class="p-4 bg-white shadow-lg sticky bottom-0 border-t border-gray-200">
+    <form id="send-container" class="flex items-center gap-2">
+      <input type="text" id="messageInp" placeholder="Type a message..." required disabled
+        class="flex-1 p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 transition bg-gray-100 cursor-not-allowed">
+      <button type="submit" disabled
+        class="btn bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl transition shadow-md disabled:opacity-50">
+        Send
+      </button>
+    </form>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const container = document.getElementById('chat-container');
+      const nameModal = document.getElementById('name-modal');
+      const nameForm = document.getElementById('name-form');
+      const nameInput = document.getElementById('name-input');
+      const sendForm = document.getElementById('send-container');
+      const messageInput = document.getElementById('messageInp');
+      const sendButton = sendForm.querySelector('.btn');
+      const userInfo = document.getElementById('user-info');
+
+      let userName = null;
+      let socket = null;
+
+      const append = (content, position, senderName = null) => {
+        const el = document.createElement('div');
+        if (position === 'system') {
+          el.classList.add('system-message');
+          el.innerText = content;
+        } else {
+          const header = position === 'left' && senderName ? `<span class="font-bold block mb-1">${senderName}:</span>` : '';
+          el.innerHTML = header + content;
+          el.classList.add('message', position);
+        }
+        container.append(el);
+        container.scrollTop = container.scrollHeight;
+      };
+
+      nameForm.addEventListener('submit', e => {
+        e.preventDefault();
+        const name = nameInput.value.trim();
+        if (!name) return;
+
+        userName = name;
+        nameModal.classList.add('hidden');
+        messageInput.disabled = false;
+        sendButton.disabled = false;
+        messageInput.classList.remove('bg-gray-100', 'cursor-not-allowed');
+        userInfo.textContent = `Logged in as: ${userName}`;
+
+        initializeSocket(userName);
+      });
+
+      const initializeSocket = (name) => {
+        // 👉 If same PC, use localhost
+        socket = io('http://localhost:8000');
+
+        socket.on('connect', () => {
+          console.log("Connected to server");
+          append(`Connected as ${name}`, 'system');
+        });
+
+        socket.emit('new-user-joined', name);
+        append('You joined the chat', 'system');
+
+        socket.on('user-joined', newName => {
+          append(`${newName} joined the chat`, 'system');
+        });
+
+        socket.on('receive', packet => {
+          const content = packet.data.text || '';
+          if (content.trim()) {
+            append(content, 'left', packet.name);
+          }
+        });
+
+        socket.on('left', leftName => {
+          append(`${leftName} left the chat`, 'system');
+        });
+
+        socket.on('connect_error', err => {
+          append(`Connection Error: ${err.message}`, 'system');
+        });
+      };
+
+      sendForm.addEventListener('submit', e => {
+        e.preventDefault();
+        const msg = messageInput.value.trim();
+        if (!msg || !socket) return;
+
+        append(msg, 'right');
+        socket.emit('send', { text: msg });
+        messageInput.value = '';
+      });
+    });
+  </script>
+</body>
+</html>
